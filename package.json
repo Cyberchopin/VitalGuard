@@ -1,0 +1,6 @@
+{
+  "name": "vitalguard", "version": "1.0.0", "private": true, "type": "module",
+  "description": "Synthetic multimodal anomaly monitoring with an auditable human review policy",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node scripts/serve.mjs", "test": "node --test", "evaluate": "node scripts/evaluate.mjs", "check": "node scripts/check.mjs" }
+}

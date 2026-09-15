@@ -1,8 +1,8 @@
 # VitalGuard
 
-> What if the safety architecture used to protect autonomous machines could protect human health?
+VitalGuard is a browser-native physiological anomaly research prototype: per-session median/MAD fitting, quality-aware rule fusion, separate observation/review states, immutable event snapshots and human-controlled escalation. All evaluation data is synthetic.
 
-VitalGuard is a research prototype for multimodal physiological anomaly monitoring. It demonstrates signal validation, contextual anomaly detection, uncertainty handling, and human-controlled escalation using synthetic data.
+The motivating question is: what if the safety architecture used to protect autonomous machines could protect human health? The implementation and its limits are specified below; no clinical or safety certification is claimed.
 
 ## Run locally
 
@@ -11,6 +11,11 @@ Requires Node.js 22 or newer. No dependency installation is required.
 - Start the dashboard: `npm start`
 - Open: http://127.0.0.1:4173
 - Run automated tests: `npm test`
+- Check module syntax and local asset paths: `npm run check`
+- Regenerate quantitative results: `npm run evaluate`
+- Verify an exported report: `node scripts/verify-report.mjs <session.json> [independently-retained-sha256]`
+
+No build step is required; `dist/` contains authored source, not disposable build output. Google Fonts is optional and falls back to system fonts offline.
 
 ## Monitoring pipeline
 
@@ -31,24 +36,34 @@ Only human confirmation enables the demo’s HIGH PRIORITY state. Unanswered rev
 
 ## Automated checks
 
-Five tests currently cover:
+Tests cover scripted behaviors plus review-time outages, recovery/re-arming, duplicate and invalid decisions, frozen historical evidence, monotonic event times, malformed inputs, sample-gap persistence, context faults, confidence arithmetic and SHA-256 export verification. See `test/engine.test.mjs` and `test/safety.test.mjs`.
 
-1. Exercise without a review request.
-2. Exclusion of an unreliable oxygen signal.
-3. Human confirmation before escalation.
-4. Unknown status after a data-stream interruption.
-5. Review timeout without automatic confirmation.
+The reproducible evaluation contains 644 synthetic traces. In the 200-trace noise/baseline-offset cohort, all 100 positive scenarios requested review and none of the 100 negative scenarios did; median/p95 detection delay from synthetic onset was 40/43 seconds. With 5% intermittent frame loss the corresponding delay was 41/52 seconds. These are development-cohort results, not patient-level sensitivity or specificity.
 
-These checks verify selected synthetic behaviors, not clinical performance.
+The report also exposes failures: prolonged data loss missed all 40 positive cases, as did jointly misleading oxygen and activity. See [evaluation protocol and complete results](docs/EVALUATION.md) before citing any number. No formal reliability proof is claimed.
+
+These failures behave differently: on continuous loss, `tick(now)` produces NO DATA and zero evidence sufficiency at t=48 in all 40 positive traces. With jointly misleading oxygen and activity, all 40 remain MONITORING with index ≥ 0.70 throughout the measured fault window: **a silent failure with no sensor-quality downgrade**. Read [known failure behavior](docs/KNOWN_LIMITATIONS.md). The dashboard does not currently offer a whole-stream outage control; these loss checks exercise the engine. “No data” is not successful anomaly detection, and no external alert is sent.
 
 ## Project structure
 
 - `dist/engine.mjs` — monitoring engine and policy parameters.
 - `dist/scenarios.mjs` — deterministic synthetic signals.
 - `dist/app.mjs` — dashboard and interaction logic.
+- `dist/audit.mjs` — canonical JSON and SHA-256 export seals.
 - `dist/index.html` and `dist/styles.css` — interface.
 - `scripts/serve.mjs` — local development server.
 - `test/engine.test.mjs` — automated behavior tests.
+- `test/safety.test.mjs` — state, evidence integrity and failure-handling tests.
+- `scripts/evaluate.mjs` — seeded cohorts and input-quality sensitivity analysis.
+
+## Technical documentation
+
+- [Architecture and state contract](docs/ARCHITECTURE.md)
+- [Confidence formula, score bounds and design limits](docs/UNCERTAINTY.md)
+- [Evaluation summary](docs/EVALUATION.md) and [per-trace results](docs/evaluation.json)
+- [Three-minute demo and Devpost draft](docs/DEMO.md)
+
+Open **Why this assessment?** to inspect every score term, confidence factor and review gate. Alert events retain their own trigger-time evidence rather than reading live values.
 
 ## Scope and limitations
 
@@ -56,10 +71,15 @@ This prototype uses synthetic data only. It does not diagnose conditions, recomm
 
 Thresholds are demonstration parameters, not validated clinical criteria. The system is inspired by safety architecture; it is not a certified safety-critical system.
 
-Session state is held in browser memory. Reloading or switching scenarios resets it. Export the session to preserve its recorded events.
+Session state is held in browser memory. Reloading or switching scenarios resets it. Export the session to preserve its recorded events. Exports now use a versioned envelope with `payload` and a SHA-256 `digest`; this is a breaking change from the original raw report shape. They cannot restore an active session.
+
+Events are immutable through returned application objects. Digest verification detects changed export contents, but an attacker able to replace both payload and digest can recompute the seal. Retain the digest independently for replacement detection. There is no authenticated identity, external audit anchor or tamper-proof database.
+
+The baseline is fitted per session and then frozen. It does not model long-term drift. Architecture documentation explains the choice and a proposed production persistence/concurrency design; neither is presented as implemented functionality.
 
 ## Next milestones
 
-- Document architecture and failure-handling decisions.
-- Extend evaluation beyond the scripted scenarios.
-- Prepare the Devpost narrative and demo video.
+- Validate on appropriately labeled open physiological recordings.
+- Design a versioned, explicit baseline recalibration workflow.
+- Implement authenticated transactional persistence if expanding beyond the demo.
+- Record the demo and prepare the final submission artifacts.

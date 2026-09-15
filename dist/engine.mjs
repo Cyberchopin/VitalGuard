@@ -1,18 +1,41 @@
 /** Deterministic research prototype. All thresholds are demo parameters, not clinical guidance. */
 export const CHANNELS = ['hr', 'spo2', 'rr', 'activity'];
-export const POLICY = Object.freeze({version:'vg-demo-1.0', samplePeriod:1, staleSeconds:3, qualityMin:0.65, baselineSamples:20, windowSeconds:5, watchScore:25, reviewScore:55, reviewConfidence:0.7, persistenceSeconds:8, recoveryScore:20, recoverySeconds:10, timeoutSeconds:30, weights:{hr:25,spo2:45,rr:30}, ranges:{hr:[25,240],spo2:[50,100],rr:[4,65],activity:[0,1]}});
+export function deepFreeze(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.values(value).forEach(deepFreeze);
+    Object.freeze(value);
+  }
+  return value;
+}
+export const POLICY = deepFreeze({version:'vg-demo-1.1', samplePeriod:1, staleSeconds:3, qualityMin:0.65, baselineSamples:20, windowSeconds:5, watchScore:25, reviewScore:55, reviewConfidence:0.7, persistenceSeconds:8, recoveryScore:20, recoverySeconds:10, timeoutSeconds:30, weights:{hr:25,spo2:45,rr:30}, ranges:{hr:[25,240],spo2:[50,100],rr:[4,65],activity:[0,1]}});
+// Evidence sufficiency index, not a calibrated probability or confidence interval.
+export function explainConfidence(quality, calibrated, stale=false) {
+  const accepted = Object.fromEntries(CHANNELS.map(k => [k, !stale && Number.isFinite(quality[k]) && quality[k]>=POLICY.qualityMin && quality[k]<=1 ? quality[k] : 0]));
+  const meanQuality = CHANNELS.reduce((sum,k)=>sum+accepted[k],0)/4;
+  const contextCap = accepted.activity ? 1 : 0.5;
+  const calibrationFactor = calibrated ? 1 : 0.5;
+  return {value:Math.min(meanQuality,contextCap)*calibrationFactor, accepted, meanQuality, contextCap, calibrationFactor,
+    formula:'min(mean accepted quality, activity-context cap) × calibration factor',
+    reasons:[...CHANNELS.filter(k=>!accepted[k]).map(k=>`${k}: excluded; contributes zero to evidence sufficiency`),...(!calibrated?['Baseline not calibrated: factor 0.5']:[]),...(!accepted.activity?['Activity unavailable: cap 0.5']:[]),...(stale?['Stream stale: all quality terms zero']:[])]};
+}
 const clamp = (n,a=0,b=1) => Math.max(a,Math.min(b,n));
 const median = a => {const s=[...a].sort((x,y)=>x-y);return s.length ? (s[Math.floor((s.length-1)/2)]+s[Math.floor(s.length/2)])/2 : 0;};
 const floors = {hr:4,spo2:0.8,rr:1.5};
 export class Monitor {
-  constructor(){this.history=[];this.events=[];this.baselineRows=[];this.baseline=null;this.lastT=null;this.lastNow=null;this.riskSince=null;this.recoverySince=null;this.episode=null;this.lastState=null;this.latest=null;this.sequence=0;}
-  event(type,t,title,detail,extra={}) {const e={id:`E${String(++this.sequence).padStart(3,'0')}`,type,t,title,detail,policy:POLICY.version,...extra};this.events.push(e);return e;}
+  #events=[];
+  constructor(){this.history=[];this.baselineRows=[];this.baseline=null;this.lastT=null;this.lastNow=null;this.riskSince=null;this.recoverySince=null;this.episode=null;this.lastState=null;this.latest=null;this.sequence=0;}
+  get events(){return Object.freeze([...this.#events]);}
+  event(type,t,title,detail,extra={}) {
+    const e=deepFreeze(structuredClone({...extra,id:`E${String(++this.sequence).padStart(3,'0')}`,type,t:Math.max(t,this.#events.at(-1)?.t??0),title,detail,policy:POLICY.version}));
+    this.#events.push(e);return e;
+  }
   ingest(frame,now=frame?.t){
     if(!frame || !Number.isFinite(frame.t) || !Number.isFinite(now) || (this.lastNow!==null && now<this.lastNow) || frame.t>now+1 || (this.lastT!==null && frame.t<=this.lastT)) {
       this.event('rejected',Number.isFinite(now)?now:(this.lastNow??0),'Frame rejected','Invalid, future, duplicate, or out-of-order timestamp.');
       return this.tick(Number.isFinite(now)?Math.max(now,this.lastNow??now):(this.lastNow??0));
     }
-    const gap=this.lastT!==null && frame.t-this.lastT>POLICY.staleSeconds;
+    // Persistence requires consecutive one-second samples, not merely a fresh last value.
+    const gap=this.lastT!==null && frame.t-this.lastT>POLICY.samplePeriod*1.5;
     if(gap){this.riskSince=null;this.recoverySince=null;this.event('quality',now,'Stream gap','Persistence window restarted; missing time is not evidence.');}
     const row={t:frame.t, values:{},quality:{},issues:[]};
     for(const k of CHANNELS){
@@ -25,7 +48,7 @@ export class Monitor {
       else if(now-frame.t>POLICY.staleSeconds) reason='stale sample';
       // A frozen numeric channel is distinct from a quiet activity channel.
       const prior=this.history.filter(r=>r.t>=frame.t-20);
-      if(!reason && k!=='activity' && prior.length>=20 && prior.every(r=>r.values[k]===s.value)) reason='flatline suspected';
+      if(!reason && k!=='activity' && prior.length>=20 && frame.t-prior[0].t>=20 && prior.every(r=>r.values[k]===s.value)) reason='flatline suspected';
       row.values[k]=s && typeof s.value==='number' && Number.isFinite(s.value)?s.value:null;
       row.quality[k]=reason?0:s.quality;
       if(reason)row.issues.push(`${k}: ${reason}`);
@@ -35,21 +58,22 @@ export class Monitor {
       if(gap)this.baselineRows=[];
       this.baselineRows.push(row);
       if(this.baselineRows.length>=POLICY.baselineSamples){
-        this.baseline=Object.fromEntries(['hr','spo2','rr'].map(k=>{const vs=this.baselineRows.map(r=>r.values[k]),center=median(vs);return[k,{center,scale:Math.max(floors[k],median(vs.map(v=>Math.abs(v-center)))*1.4826)}];}));
+        this.baseline=deepFreeze(Object.fromEntries(['hr','spo2','rr'].map(k=>{const vs=this.baselineRows.map(r=>r.values[k]),center=median(vs);return[k,{center,scale:Math.max(floors[k],median(vs.map(v=>Math.abs(v-center)))*1.4826)}];})));
         this.event('baseline',now,'Baseline calibrated','20 accepted resting samples. Robust median and MAD model frozen for this session.',{baseline:this.baseline});
       }
     } else if(!this.baseline) this.baselineRows=[];
-    return this.evaluate(now);
+    return this.evaluate(now,true);
   }
   tick(now){if(!Number.isFinite(now))throw new Error('Invalid clock');now=Math.max(now,this.lastNow??now);this.lastNow=now;return this.evaluate(now);}
-  evaluate(now){
+  evaluate(now,acceptedFrame=false){
     const row=this.history.at(-1),stale=!row || now-row.t>POLICY.staleSeconds;
     const quality=Object.fromEntries(CHANNELS.map(k=>[k,stale?0:(row?.quality[k]??0)]));
     const valid=CHANNELS.filter(k=>quality[k]>=POLICY.qualityMin);
     const issues=stale?['stream: no fresh data']:[...row.issues];
     const active=valid.includes('activity') && row.values.activity>=0.35;
     const features={};let score=0,missingWeight=0;
-    for(const k of ['hr','spo2','rr']){
+    // Compute oxygen first: corroborating oxygen deviation can veto an activity discount.
+    for(const k of ['spo2','hr','rr']){
       if(!valid.includes(k)){missingWeight+=POLICY.weights[k];features[k]={value:null,contribution:0,reason:'Excluded: unreliable signal',z:null,trend:null};continue;}
       const window=this.history.filter(r=>r.t>=row.t-POLICY.windowSeconds+1 && r.quality[k]>=POLICY.qualityMin);
       const value=median(window.map(r=>r.values[k]));
@@ -57,28 +81,34 @@ export class Monitor {
       const b=this.baseline?.[k];const z=b ? (k==='spo2'?b.center-value:value-b.center)/b.scale : 0;
       const rule=k==='hr'?clamp((value-100)/50):k==='spo2'?clamp((96-value)/8):clamp((value-22)/12);
       const novelty=b?0.6*clamp((z-3)/5):0;
-      const context=(active && k!=='spo2')?0.15:1;
+      const discount=active && k!=='spo2' && !(features.spo2?.severity>=0.25);
+      const context=discount?0.15:1;
       const severity=Math.max(rule,novelty)*context;
       const contribution=severity*POLICY.weights[k];score+=contribution;
-      features[k]={value,trend,z,severity,contribution,reason:active&&k!=='spo2'?'Activity context discounts this channel':severity>0?`${k==='spo2'?'Downward':'Upward'} deviation from demo envelope or learned baseline`:'Within demo envelope'};
+      features[k]={raw:row.values[k],value,trend,z,rule,novelty,context,weight:POLICY.weights[k],severity,contribution,reason:discount?'Activity context discounts this channel':active&&k!=='spo2'?'Oxygen corroboration vetoes the activity discount':severity>0?`${k==='spo2'?'Downward':'Upward'} deviation from demo envelope or learned baseline`:'Within demo envelope'};
     }
     score=Math.round(score);
-    const confidence=stale?0:Math.min(valid.includes('activity')?1:0.5,CHANNELS.reduce((s,k)=>s+quality[k],0)/4)*(this.baseline?1:0.5);
+    const confidenceExplanation=explainConfidence(quality,!!this.baseline,stale);
+    const confidence=confidenceExplanation.value;
     const supports=Object.values(features).filter(f=>f.severity>=0.25).length;
     const qualifies=this.baseline && score>=POLICY.reviewScore && confidence>=POLICY.reviewConfidence && supports>=2;
-    if(qualifies){if(this.riskSince===null)this.riskSince=now;}else this.riskSince=null;
-    const persistence=this.riskSince===null?0:now-this.riskSince;
-    if(!stale && valid.length===4 && score<POLICY.recoveryScore){if(this.recoverySince===null)this.recoverySince=now;}else this.recoverySince=null;
-    if(this.episode && this.episode.status!=='pending' && this.recoverySince!==null && now-this.recoverySince>=POLICY.recoverySeconds){this.event('recovery',now,'Episode re-armed','10 seconds below recovery threshold with all channels reliable.');this.episode=null;}
-    if(qualifies && persistence>=POLICY.persistenceSeconds && !this.episode){
-      this.episode=this.event('review',now,'Human review requested',`${supports} channels support a sustained anomaly. Confirm an observed concern or dismiss with a reason.`,{status:'pending',score,confidence,evidence:JSON.parse(JSON.stringify(features))});
+    if(!qualifies)this.riskSince=null;
+    else if(acceptedFrame && this.riskSince===null)this.riskSince=row.t;
+    const persistence=this.riskSince===null?0:Math.max(0,row.t-this.riskSince);
+    if(stale || valid.length<4 || score>=POLICY.recoveryScore)this.recoverySince=null;
+    else if(acceptedFrame && this.recoverySince===null)this.recoverySince=row.t;
+    if(acceptedFrame && this.episode && this.episode.status!=='pending' && this.recoverySince!==null && row.t-this.recoverySince>=POLICY.recoverySeconds){this.event('recovery',now,'Episode re-armed','10 seconds below recovery threshold with all channels reliable.',{episodeId:this.episode.id});this.episode=null;}
+    const gates={calibrated:!!this.baseline,score:score>=POLICY.reviewScore,confidence:confidence>=POLICY.reviewConfidence,corroboration:supports>=2,persistence:persistence>=POLICY.persistenceSeconds};
+    if(acceptedFrame && qualifies && persistence>=POLICY.persistenceSeconds && !this.episode){
+      this.episode=this.event('review',now,'Human review requested',`${supports} channels support a sustained anomaly. Confirm an observed concern or dismiss with a reason.`,{status:'pending',score,confidence,evidence:features,confidenceExplanation,gates,raw:row.values,baseline:this.baseline});
     }
-    if(this.episode?.status==='pending' && now-this.episode.t>=POLICY.timeoutSeconds && !this.episode.timedOut){this.episode.timedOut=true;this.event('timeout',now,'Review overdue','No response after 30 simulated seconds. Review remains unresolved; no autonomous action taken.',{episodeId:this.episode.id});}
-    let state=stale?'NO DATA':!this.baseline?'CALIBRATING':valid.length<4?'SENSOR CHECK':score>=POLICY.watchScore?'WATCH':'MONITORING';
-    if(this.episode?.status==='pending')state='REVIEW REQUESTED';
-    if(this.episode?.status==='confirmed')state='HIGH PRIORITY';
-    if(state!==this.lastState){this.event('state',now,state,issues.length?issues.join('; '):`Observed score ${score}/100; ${Math.round(confidence*100)}% evidence confidence.`);this.lastState=state;}
-    this.latest={t:now,frameT:row?.t??null,state,score,scoreRange:[score,Math.min(100,Math.ceil(score+missingWeight))],confidence,valid,quality,issues,features,active,stale,persistence,baseline:this.baseline,baselineProgress:this.baselineRows.length,episode:this.episode,values:row?.values??{},policy:POLICY.version};
+    if(this.episode?.status==='pending' && now-this.episode.t>=POLICY.timeoutSeconds && !this.episode.timedOut){this.episode=deepFreeze({...this.episode,timedOut:true});this.event('timeout',now,'Review overdue','No response after 30 simulated seconds. Review remains unresolved; no autonomous action taken.',{episodeId:this.episode.id});}
+    const observationState=stale?'NO DATA':!this.baseline?'CALIBRATING':valid.length<4?'SENSOR CHECK':score>=POLICY.watchScore?'WATCH':'MONITORING';
+    const reviewState=this.episode?.status==='pending'?'REVIEW REQUESTED':this.episode?.status==='confirmed'?'HIGH PRIORITY':this.episode?.status==='dismissed'?'DISMISSED':'NONE';
+    const state=['NO DATA','SENSOR CHECK'].includes(observationState)?observationState:['REVIEW REQUESTED','HIGH PRIORITY'].includes(reviewState)?reviewState:observationState;
+    const stateKey=observationState+'|'+reviewState;
+    if(stateKey!==this.lastState){this.event('state',now,state,`Observation: ${observationState}; review: ${reviewState}. `+(issues.length?issues.join('; '):`Observed score ${score}/100; ${Math.round(confidence*100)}% evidence sufficiency.`),{observationState,reviewState});this.lastState=stateKey;}
+    this.latest=deepFreeze(structuredClone({t:now,frameT:row?.t??null,state,observationState,reviewState,score,scoreRange:[score,Math.min(100,Math.ceil(score+missingWeight))],confidence,confidenceExplanation,gates,valid,quality,issues,features,active,stale,persistence,baseline:this.baseline,baselineProgress:this.baselineRows.length,episode:this.episode,values:row?.values??{},policy:POLICY.version}));
     return this.latest;
   }
   review(id,action,note,now=this.lastNow){
@@ -86,9 +116,11 @@ export class Monitor {
     if(!this.episode || this.episode.id!==id || this.episode.status!=='pending')throw new Error('This review is no longer pending');
     if(typeof note!=='string' || note.trim().length<3 || note.length>500)throw new Error('Add a note between 3 and 500 characters');
     if(!Number.isFinite(now)||now<this.lastNow)throw new Error('Invalid review time');
-    this.episode.status=action==='confirm'?'confirmed':'dismissed';
+    this.episode=deepFreeze({...this.episode,status:action==='confirm'?'confirmed':'dismissed',resolvedAt:now});
+    // Recovery observed before a decision cannot immediately clear that decision.
+    this.recoverySince=null;
     this.event(action,now,action==='confirm'?'Concern confirmed · high priority':'Review dismissed',note.trim(),{episodeId:id,actor:'Demo operator'});
     return this.tick(now);
   }
-  report(){return structuredClone({schemaVersion:1,synthetic:true,policy:POLICY,baseline:this.baseline,latest:this.latest,events:this.events});}
+  report(){return structuredClone({schemaVersion:2,synthetic:true,policy:POLICY,baseline:this.baseline,latest:this.latest,events:this.events});}
 }

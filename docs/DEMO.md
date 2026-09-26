@@ -2,13 +2,13 @@
 
 **0:00–0:20 — Thesis and scope.** “VitalGuard studies how a monitoring agent should respond when evidence is uncertain. All signals today are synthetic. We distinguish what is observed from what a person has reviewed.”
 
-**0:20–0:50 — Activity & recovery.** Start at 10× speed. Show rising HR/RR with movement and no human review. Open “Why this assessment?” to show the activity discount and contribution arithmetic.
+**0:20–0:50 — Activity & recovery.** Select Activity & recovery, then Skip to key moment (01:10). Show rising HR/RR with movement and no human review. Open “Why this assessment?” to show the activity discount and contribution arithmetic.
 
-**0:50–1:20 — Sensor disconnect.** Run past 00:45, then pause. Show unreliable oxygen excluded, SENSOR CHECK, and a wider missing-contribution range. “A low observed score is not a statement that the person is safe.”
+**0:50–1:20 — Sensor disconnect.** Select Sensor disconnect, then Skip to key moment (01:05). Show unreliable oxygen excluded, SENSOR CHECK, and a wider missing-contribution range. “A low observed score is not a statement that the person is safe.”
 
-**1:20–2:00 — Converging signals.** Run until REVIEW REQUESTED; pause. Expand the event evidence and current calculation. Show the five review gates. Enter a note and confirm. Explain that high priority is a local demo label; no external notification has been sent.
+**1:20–2:00 — Converging signals.** Click Try human review to replay actual engine samples to the first review at 01:08; playback pauses automatically. Expand the event evidence and current calculation. Show the five review gates. Enter a note and confirm. Explain that high priority is a local demo label; no external notification has been sent.
 
-**2:00–2:35 — Failure visibility and its limits.** Show EVALUATION.md's failure-visibility table. Say: “Both groups miss all 40 anomalies. Stream loss produces NO DATA and zero evidence index in the engine. Jointly misleading oxygen and activity stays MONITORING with a high index: that is a silent failure we have not solved.” Do not simulate stream loss by pausing the UI: pause freezes simulated time. Do not present synthetic metrics as clinical performance.
+**2:00–2:35 — Failure visibility and its limits.** Show the on-page Evidence & limits table (full protocol remains in EVALUATION.md). Say: “Both groups miss all 40 anomalies. Stream loss produces NO DATA and zero evidence index in the engine. Jointly misleading oxygen and activity stays MONITORING with a high index: that is a silent failure we have not solved.” Do not simulate stream loss by pausing the UI: pause freezes simulated time. Do not present synthetic metrics as clinical performance.
 
 **2:35–3:00 — Audit boundary.** Export a sealed report. Explain immutable in-memory snapshots and digest verification, including why this is not a signed, tamper-proof external audit log. Finish with the next step: real signal-quality validation and persistent single-writer session ownership.
 

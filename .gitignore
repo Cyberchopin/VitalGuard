@@ -4,3 +4,6 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Legacy local PDF predates the current README; preserve locally only.
+/README.pdf

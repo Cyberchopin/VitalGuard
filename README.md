@@ -83,3 +83,10 @@ The baseline is fitted per session and then frozen. It does not model long-term 
 - Design a versioned, explicit baseline recalibration workflow.
 - Implement authenticated transactional persistence if expanding beyond the demo.
 - Record the demo and prepare the final submission artifacts.
+
+
+## Submission interface update - September 22, 2026
+
+Try human review replays actual synthetic frames to the first pending review. Skip to key moment replays to a representative point without bypassing the engine. The page now includes selected evaluation results, explicit silent-failure disclosure, and a downloadable [one-page project brief](dist/VitalGuard-project-brief.pdf). All sessions remain in memory; resetting a scenario or refreshing discards the current session. Export before switching if you need to retain it.
+
+The simulation engine and its thresholds are unchanged. See [release validation](docs/RELEASE-2026-09-22.md) and [recording script / Devpost text](docs/DEMO.md).
